@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Hydrogen Angular Wavefunctions (ShaderMaterial, 1s–7h)</title>
+  <title>Hydrogen Angular Wavefunctions (GPU, 1s–7h)</title>
   <style>
     body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }
     #renderer-container { width: 100vw; height: 100vh; overflow: hidden; }
@@ -14,7 +14,6 @@
     #ui label { display: block; margin-top: 4px; }
     #ui input[type="number"], #ui select { width: 80px; margin-top: 2px; }
     #ui input[type="checkbox"] { margin-right: 4px; }
-    a { color: #9cf; }
   </style>
 </head>
 <body>
@@ -51,12 +50,10 @@
   </div>
 </div>
 
-<!-- Use ES modules for Three.js r160+ -->
 <script type="module">
   import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
   import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
-  // Scene setup. [web:26]
   const container = document.getElementById('renderer-container');
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000);
@@ -77,13 +74,11 @@
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  // Lights. [web:26]
   scene.add(new THREE.AmbientLight(0xffffff, 0.4));
   const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
   dirLight.position.set(5, 3, 4);
   scene.add(dirLight);
 
-  // UI elements.
   const nInput = document.getElementById('nInput');
   const lInput = document.getElementById('lInput');
   const mInput = document.getElementById('mInput');
@@ -116,7 +111,6 @@
     return { n, l, m };
   }
 
-  // Shader uniforms: store as floats for GLSL. [web:19]
   const uniforms = {
     u_n:         { value: 1.0 },
     u_l:         { value: 0.0 },
@@ -125,7 +119,7 @@
     u_mode:      { value: 0.0 }
   };
 
-  const vertexShader = /* glsl */`
+  const vertexShader = `
     varying vec3 vPos;
     void main() {
       vPos = position;
@@ -133,7 +127,7 @@
     }
   `;
 
-  const fragmentShader = /* glsl */`
+  const fragmentShader = `
     precision highp float;
 
     uniform float u_n;
@@ -168,14 +162,10 @@
         }
       }
 
-      if (l == am) {
-        return pmm;
-      }
+      if (l == am) return pmm;
 
       float pmmp1 = x * (2.0 * am + 1.0) * pmm;
-      if (l == am + 1.0) {
-        return pmmp1;
-      }
+      if (l == am + 1.0) return pmmp1;
 
       float pll = 0.0;
       for (float ll = am + 2.0; ll <= 7.0; ll += 1.0) {
@@ -248,7 +238,6 @@
     side: THREE.DoubleSide
   });
 
-  // Geometry and mesh. [web:26][web:44]
   const radiusBase = 1.0;
   const thetaSegments = 80;
   const phiSegments = 160;
