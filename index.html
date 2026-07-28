@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hydrogen Angular Wavefunctions (ShaderMaterial, 1s–7h)</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+    #renderer-container { width: 100vw; height: 100vh; overflow: hidden; }
+    #ui {
+      position: absolute; top: 10px; left: 10px;
+      background: rgba(0,0,0,0.7); padding: 10px 12px; border-radius: 6px;
+      font-size: 13px; z-index: 10;
+    }
+    #ui label { display: block; margin-top: 4px; }
+    #ui input[type="number"], #ui select { width: 80px; margin-top: 2px; }
+    #ui input[type="checkbox"] { margin-right: 4px; }
+    a { color: #9cf; }
+  </style>
+</head>
+<body>
+<div id="renderer-container"></div>
+
+<div id="ui">
+  <div><strong>Hydrogen Angular Wavefunctions (GPU)</strong></div>
+  <label>
+    n:
+    <input id="nInput" type="number" min="1" max="7" step="1" value="1">
+  </label>
+  <label>
+    l:
+    <input id="lInput" type="number" min="0" max="6" step="1" value="0">
+  </label>
+  <label>
+    m<sub>l</sub>:
+    <input id="mInput" type="number" min="0" max="0" step="1" value="0">
+  </label>
+  <label>
+    Color mode:
+    <select id="modeSelect">
+      <option value="sign">Sign (red/blue)</option>
+      <option value="magnitude">Magnitude</option>
+    </select>
+  </label>
+  <label style="margin-top:6px;">
+    <input id="nodesToggle" type="checkbox">
+    Highlight angular nodes
+  </label>
+  <div style="margin-top:6px;">
+    Drag to rotate. Scroll to zoom.<br>
+    1s–7h: choose n ≤ 7, l ≤ n−1, |m<sub>l</sub>| ≤ l.
+  </div>
+</div>
+
+<!-- Use ES modules for Three.js r160+ -->
+<script type="module">
+  import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+  import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+  // Scene setup. [web:26]
+  const container = document.getElementById('renderer-container');
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+
+  const camera = new THREE.PerspectiveCamera(
+    45,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    100
+  );
+  camera.position.set(0, 0, 4);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  container.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  // Lights. [web:26]
+  scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(5, 3, 4);
+  scene.add(dirLight);
+
+  // UI elements.
+  const nInput = document.getElementById('nInput');
+  const lInput = document.getElementById('lInput');
+  const mInput = document.getElementById('mInput');
+  const modeSelect = document.getElementById('modeSelect');
+  const nodesToggle = document.getElementById('nodesToggle');
+
+  function clampQuantumNumbers() {
+    let n = parseInt(nInput.value, 10);
+    let l = parseInt(lInput.value, 10);
+    let m = parseInt(mInput.value, 10);
+
+    if (Number.isNaN(n)) n = 1;
+    if (Number.isNaN(l)) l = 0;
+    if (Number.isNaN(m)) m = 0;
+
+    if (n < 1) n = 1;
+    if (n > 7) n = 7;
+    if (l < 0) l = 0;
+    if (l > n - 1) l = n - 1;
+    const maxM = l;
+    if (m < -maxM) m = -maxM;
+    if (m > maxM) m = maxM;
+
+    nInput.value = n;
+    lInput.value = l;
+    mInput.value = m;
+    mInput.min = -maxM;
+    mInput.max = maxM;
+
+    return { n, l, m };
+  }
+
+  // Shader uniforms: store as floats for GLSL. [web:19]
+  const uniforms = {
+    u_n:         { value: 1.0 },
+    u_l:         { value: 0.0 },
+    u_m:         { value: 0.0 },
+    u_showNodes: { value: false },
+    u_mode:      { value: 0.0 }
+  };
+
+  const vertexShader = /* glsl */`
+    varying vec3 vPos;
+    void main() {
+      vPos = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+
+  const fragmentShader = /* glsl */`
+    precision highp float;
+
+    uniform float u_n;
+    uniform float u_l;
+    uniform float u_m;
+    uniform bool  u_showNodes;
+    uniform float u_mode;
+
+    varying vec3 vPos;
+
+    float factorial(float k) {
+      float res = 1.0;
+      for (float i = 2.0; i <= k; i += 1.0) {
+        res *= i;
+      }
+      return res;
+    }
+
+    float associatedLegendre(float lf, float mf, float x) {
+      float l  = floor(lf + 0.5);
+      float m  = floor(mf + 0.5);
+      float am = abs(m);
+      if (am > l) return 0.0;
+
+      float pmm = 1.0;
+      if (am > 0.0) {
+        float somx2 = sqrt((1.0 - x) * (1.0 + x));
+        float fact = 1.0;
+        for (float i = 1.0; i <= am; i += 1.0) {
+          pmm *= -fact * somx2;
+          fact += 2.0;
+        }
+      }
+
+      if (l == am) {
+        return pmm;
+      }
+
+      float pmmp1 = x * (2.0 * am + 1.0) * pmm;
+      if (l == am + 1.0) {
+        return pmmp1;
+      }
+
+      float pll = 0.0;
+      for (float ll = am + 2.0; ll <= 7.0; ll += 1.0) {
+        if (ll > l) break;
+        pll = ((2.0 * ll - 1.0) * x * pmmp1 - (ll + am - 1.0) * pmm) / (ll - am);
+        pmm = pmmp1;
+        pmmp1 = pll;
+      }
+      return pll;
+    }
+
+    float realSphericalHarmonic(float lf, float mf, float theta, float phi) {
+      float l  = floor(lf + 0.5);
+      float m  = floor(mf + 0.5);
+      float am = abs(m);
+
+      float x = cos(theta);
+      float Plm = associatedLegendre(l, m, x);
+
+      float num  = factorial(l - am);
+      float den  = factorial(l + am);
+      float norm = sqrt(((2.0 * l + 1.0) / (4.0 * 3.14159265)) * (num / den));
+
+      if (m > 0.0) {
+        return sqrt(2.0) * norm * cos(am * phi) * Plm;
+      } else if (m < 0.0) {
+        return sqrt(2.0) * norm * sin(am * phi) * Plm;
+      } else {
+        return norm * Plm;
+      }
+    }
+
+    void main() {
+      vec3 p = normalize(vPos);
+      float theta = acos(p.z);
+      float phi   = atan(p.y, p.x);
+
+      float Y = realSphericalHarmonic(u_l, u_m, theta, phi);
+      float A = abs(Y);
+
+      float A_norm = clamp(A * 4.0, 0.0, 1.0);
+
+      float nodeMask = 0.0;
+      if (u_showNodes) {
+        nodeMask = 1.0 - smoothstep(0.0, 0.04, A);
+      }
+
+      vec3 baseCol;
+      if (u_mode < 0.5) {
+        if (Y > 0.0) {
+          baseCol = mix(vec3(0.2, 0.1, 0.3), vec3(1.0, 0.4, 0.3), A_norm);
+        } else {
+          baseCol = mix(vec3(0.1, 0.1, 0.3), vec3(0.3, 0.4, 1.0), A_norm);
+        }
+      } else {
+        baseCol = mix(vec3(0.0, 0.1, 0.2), vec3(0.0, 0.9, 0.8), A_norm);
+      }
+
+      vec3 nodeCol = vec3(1.0, 1.0, 0.3);
+      vec3 color = mix(baseCol, nodeCol, nodeMask);
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `;
+
+  const shaderMaterial = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader,
+    fragmentShader,
+    side: THREE.DoubleSide
+  });
+
+  // Geometry and mesh. [web:26][web:44]
+  const radiusBase = 1.0;
+  const thetaSegments = 80;
+  const phiSegments = 160;
+
+  const sphereGeometry = new THREE.SphereGeometry(radiusBase, phiSegments, thetaSegments);
+  const orbitalMesh = new THREE.Mesh(sphereGeometry, shaderMaterial);
+  scene.add(orbitalMesh);
+
+  function updateUniformsFromUI() {
+    const { n, l, m } = clampQuantumNumbers();
+    uniforms.u_n.value = n;
+    uniforms.u_l.value = l;
+    uniforms.u_m.value = m;
+    uniforms.u_showNodes.value = nodesToggle.checked;
+    uniforms.u_mode.value = (modeSelect.value === 'sign') ? 0.0 : 1.0;
+  }
+
+  nInput.addEventListener('change', updateUniformsFromUI);
+  lInput.addEventListener('change', updateUniformsFromUI);
+  mInput.addEventListener('change', updateUniformsFromUI);
+  modeSelect.addEventListener('change', updateUniformsFromUI);
+  nodesToggle.addEventListener('change', updateUniformsFromUI);
+
+  updateUniformsFromUI();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+</script>
+</body>
+</html>
